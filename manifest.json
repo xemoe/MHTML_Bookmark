@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Save as MHTML",
+  "version": "1.0",
+  "description": "Save the current webpage as an MHTML file via context menu",
+  "permissions": [
+    "activeTab",
+    "contextMenus",
+    "downloads",
+    "pageCapture"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}
