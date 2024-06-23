@@ -1,24 +1,35 @@
-chrome.runtime.onInstalled.addListener(() => {
-    chrome.contextMenus.create({
-        id: "saveMHTML", title: "Save as MHTML", contexts: ["page"]
-    });
-});
+// Listener for when the extension is installed
+chrome.runtime.onInstalled.addListener(createContextMenu);
 
-chrome.contextMenus.onClicked.addListener((info, tab) => {
+// Listener for when a context menu item is clicked
+chrome.contextMenus.onClicked.addListener(handleContextMenuClick);
+
+function createContextMenu() {
+    chrome.contextMenus.create({
+        id: "saveMHTML",
+        title: "Save as MHTML",
+        contexts: ["page"]
+    });
+}
+
+function handleContextMenuClick(info, tab) {
     if (info.menuItemId === "saveMHTML") {
-        // Wait for the tab to finish loading before saving as MHTML
         if (tab.status === "complete") {
             saveMHTML(tab);
         } else {
-            chrome.tabs.onUpdated.addListener(function listener(tabId, changeInfo) {
-                if (tabId === tab.id && changeInfo.status === "complete") {
-                    chrome.tabs.onUpdated.removeListener(listener);
-                    saveMHTML(tab);
-                }
-            });
+            waitForTabToLoad(tab);
         }
     }
-});
+}
+
+function waitForTabToLoad(tab) {
+    chrome.tabs.onUpdated.addListener(function listener(tabId, changeInfo) {
+        if (tabId === tab.id && changeInfo.status === "complete") {
+            chrome.tabs.onUpdated.removeListener(listener);
+            saveMHTML(tab);
+        }
+    });
+}
 
 function saveMHTML(tab) {
     chrome.pageCapture.saveAsMHTML({tabId: tab.id}, (mhtmlData) => {
@@ -27,87 +38,91 @@ function saveMHTML(tab) {
             return;
         }
 
-        // Parse the URL to get the domain name and replace "." with "_"
         let url = new URL(tab.url);
         let domain_name = url.hostname.replace(/\./g, '_');
 
-        // Send a message to the content script to generate SHA-256 hash for the path and title
         chrome.tabs.sendMessage(tab.id, {
             method: "hash",
             data: [url.pathname, tab.title]
         }, (response) => {
+            handleResponse(response, mhtmlData, domain_name);
+        });
+    });
+}
 
-            if (chrome.runtime.lastError) {
-                chrome.notifications.create(`Save as MHTML Notification - ${Date.now()}`, {
-                    type: 'basic',
-                    iconUrl: 'icon48.png',
-                    title: 'Save as MHTML',
-                    message: "An error occurred while saving the page. Please try again or refresh the webpage."
-                });
-                console.error(chrome.runtime.lastError.message);
-                return;
-            }
+function handleResponse(response, mhtmlData, domain_name) {
+    if (chrome.runtime.lastError) {
+        createNotification("An error occurred while saving the page. Please try again or refresh the webpage.");
+        console.error(chrome.runtime.lastError.message);
+        return;
+    }
 
-            if (response) {
-                let [sha256_path, sha256_title] = response;
-                let date = new Date();
-                let date_suffix = date.getFullYear() + "_" + (date.getMonth() + 1).toString().padStart(2, '0') + "_" + date.getDate().toString().padStart(2, '0');
-                let filename = domain_name + "_" + sha256_path + "_" + sha256_title + "_" + date_suffix + ".mhtml";
-                let blob = new Blob([mhtmlData], {type: 'application/mhtml'});
+    if (response) {
+        let [sha256_path, sha256_title] = response;
+        let date = new Date();
+        let date_suffix = date.getFullYear() + "_" + (date.getMonth() + 1).toString().padStart(2, '0') + "_" + date.getDate().toString().padStart(2, '0');
+        let filename = domain_name + "_" + sha256_path + "_" + sha256_title + "_" + date_suffix + ".mhtml";
+        let blob = new Blob([mhtmlData], {type: 'application/mhtml'});
 
-                //
-                // debug blob size
-                //
-                console.log('Blob size:', blob.size);
+        console.log('Blob size:', blob.size);
 
-                let reader = new FileReader();
-                reader.onload = function () {
-                    let dataUrl = reader.result;
-                    dataUrl = dataUrl.replace(/Content-Location: (blob:https?:\/\/[^\s]+)/g, (a, href) => {
-                        const r = new RegExp(href.split('').join('(=\\r\\n)?'), 'g');
-                        return dataUrl.replace(r, href.replace('blob:', 'cid:blob.'));
-                    });
+        let reader = new FileReader();
+        reader.onload = function () {
+            handleFileLoad(reader, filename);
+        };
+        reader.readAsDataURL(blob);
+    } else {
+        createNotification('The content is not ready yet. Please wait for the page to finish loading.');
+    }
+}
 
-                    // Create a download item from the data URL
-                    chrome.downloads.download({
-                        url: dataUrl, filename: filename, saveAs: true
-                    }, (downloadId) => {
-                        if (chrome.runtime.lastError) {
-                            console.warn('filename issue', filename);
-                            filename = filename.substr(0, filename.length - 5)
-                                .substr(0, 254)
-                                .replace(/[*?"<>|:~]/gi, '-') + '.mhtml';
+function handleFileLoad(reader, filename) {
+    let dataUrl = reader.result;
+    dataUrl = dataUrl.replace(/Content-Location: (blob:https?:\/\/[^\s]+)/g, (a, href) => {
+        const r = new RegExp(href.split('').join('(=\\r\\n)?'), 'g');
+        return dataUrl.replace(r, href.replace('blob:', 'cid:blob.'));
+    });
 
-                            chrome.downloads.download({
-                                url: dataUrl, saveAs: true, filename: filename
-                            }, (downloadId) => {
-                                if (chrome.runtime.lastError) {
-                                    console.warn('filename issue', filename);
-                                    chrome.downloads.download({
-                                        url: dataUrl, saveAs: true, filename: 'page.mhtml'
-                                    });
-                                }
-                            });
-                        } else {
-                            console.log('Download started with ID:', downloadId);
-                            chrome.notifications.create(`Save as MHTML Notification - ${Date.now()}`, {
-                                type: 'basic',
-                                iconUrl: 'icon48.png',
-                                title: 'Save as MHTML',
-                                message: 'The page has been saved as MHTML.'
-                            });
-                        }
-                    });
-                };
-                reader.readAsDataURL(blob);
-            } else {
-                chrome.notifications.create({
-                    type: 'basic',
-                    iconUrl: 'icon48.png',
-                    title: 'Save as MHTML',
-                    message: 'The content is not ready yet. Please wait for the page to finish loading.'
-                });
-            }
-        })
+    chrome.downloads.download({
+        url: dataUrl, filename: filename, saveAs: true
+    }, (downloadId) => {
+        handleDownload(downloadId, dataUrl, filename);
+    });
+}
+
+function handleDownload(downloadId, dataUrl, filename) {
+    if (chrome.runtime.lastError) {
+        handleFilenameIssue(dataUrl, filename);
+    } else {
+        console.log('Download started with ID:', downloadId);
+        createNotification('The page has been saved as MHTML.');
+    }
+}
+
+function handleFilenameIssue(dataUrl, filename) {
+    console.warn('filename issue', filename);
+
+    filename = filename.substring(0, filename.length - 5)
+        .substring(0, 254)
+        .replace(/[*?"<>|:~]/gi, '-') + '.mhtml';
+
+    chrome.downloads.download({
+        url: dataUrl, saveAs: true, filename: filename
+    }, (downloadId) => {
+        if (chrome.runtime.lastError) {
+            console.warn('filename issue', filename);
+            chrome.downloads.download({
+                url: dataUrl, saveAs: true, filename: 'page.mhtml'
+            });
+        }
+    });
+}
+
+function createNotification(message) {
+    chrome.notifications.create(`Save as MHTML Notification - ${Date.now()}`, {
+        type: 'basic',
+        iconUrl: 'icon48.png',
+        title: 'Save as MHTML',
+        message: message
     });
 }
