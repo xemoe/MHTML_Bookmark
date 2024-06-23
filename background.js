@@ -10,15 +10,24 @@ function createContextMenu() {
         title: "Save as MHTML",
         contexts: ["page"]
     });
+
+    chrome.contextMenus.create({
+        id: "uploadMHTML",
+        title: "Upload as MHTML",
+        contexts: ["page"]
+    });
 }
 
 function handleContextMenuClick(info, tab) {
+    if (tab.status !== "complete") {
+        createNotification('The content is not ready yet. Please wait for the page to finish loading.');
+        return;
+    }
+
     if (info.menuItemId === "saveMHTML") {
-        if (tab.status === "complete") {
-            saveMHTML(tab);
-        } else {
-            waitForTabToLoad(tab);
-        }
+        saveMHTML(tab, defaultHandleFileLoad);
+    } else if (info.menuItemId === "uploadMHTML") {
+        saveMHTML(tab, handleApiUpload);
     }
 }
 
@@ -31,7 +40,7 @@ function waitForTabToLoad(tab) {
     });
 }
 
-function saveMHTML(tab) {
+function saveMHTML(tab, handleFileLoadCallback) {
     chrome.pageCapture.saveAsMHTML({tabId: tab.id}, (mhtmlData) => {
         if (chrome.runtime.lastError) {
             console.error(chrome.runtime.lastError);
@@ -45,12 +54,12 @@ function saveMHTML(tab) {
             method: "hash",
             data: [url.pathname, tab.title]
         }, (response) => {
-            handleResponse(response, mhtmlData, domain_name);
+            handleResponse(response, mhtmlData, domain_name, handleFileLoadCallback);
         });
     });
 }
 
-function handleResponse(response, mhtmlData, domain_name) {
+function handleResponse(response, mhtmlData, domain_name, handleFileLoadCallback) {
     if (chrome.runtime.lastError) {
         createNotification("An error occurred while saving the page. Please try again or refresh the webpage.");
         console.error(chrome.runtime.lastError.message);
@@ -68,7 +77,7 @@ function handleResponse(response, mhtmlData, domain_name) {
 
         let reader = new FileReader();
         reader.onload = function () {
-            handleFileLoad(reader, filename);
+            handleFileLoadCallback(reader, filename);
         };
         reader.readAsDataURL(blob);
     } else {
@@ -76,7 +85,7 @@ function handleResponse(response, mhtmlData, domain_name) {
     }
 }
 
-function handleFileLoad(reader, filename) {
+function defaultHandleFileLoad(reader, filename) {
     let dataUrl = reader.result;
     dataUrl = dataUrl.replace(/Content-Location: (blob:https?:\/\/[^\s]+)/g, (a, href) => {
         const r = new RegExp(href.split('').join('(=\\r\\n)?'), 'g');
@@ -125,4 +134,34 @@ function createNotification(message) {
         title: 'Save as MHTML',
         message: message
     });
+}
+
+function handleApiUpload(reader, filename) {
+    let dataUrl = reader.result;
+    dataUrl = dataUrl.replace(/Content-Location: (blob:https?:\/\/[^\s]+)/g, (a, href) => {
+        const r = new RegExp(href.split('').join('(=\\r\\n)?'), 'g');
+        return dataUrl.replace(r, href.replace('blob:', 'cid:blob.'));
+    });
+
+    // Convert data URL to Blob
+    const byteCharacters = atob(dataUrl.split(',')[1]);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], {type: 'application/mhtml'});
+
+    // Create a FormData object
+    const formData = new FormData();
+    formData.append('file', blob, filename);
+
+    // Send a POST request to your API
+    fetch('http://localhost:3001/api/upload', {
+        method: 'POST',
+        body: formData
+    })
+        .then(response => response.json())
+        .then(data => console.log(data))
+        .catch(error => console.error('Error:', error));
 }
