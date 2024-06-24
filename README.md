@@ -53,6 +53,7 @@ The extension consists of three main JavaScript files:
 - [ ] Add support for browser shortcut keys. (e.g., Ctrl + S for saving as MHTML, Ctrl + U for uploading as MHTML)
 - [ ] Add support for shortcut keys set by the user.
 - [ ] Add detection for existing MHTML url in [bookmark service](https://github.com/xemoe/bookmark_service).
+- [ ] Save to Cloud storage and support external API. (e.g. vercel)
 
 ### Suggestions for Improvement
 
